@@ -3,6 +3,10 @@ const TelegramBot = require('node-telegram-bot-api');
 const OpenAI = require('openai');
 const { Pool } = require('pg');
 
+/* =============================
+   TELEGRAM BOT & OPENAI CLIENT
+============================= */
+
 const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
 
 const openai = new OpenAI({
@@ -56,6 +60,19 @@ Be decisive.
 `;
 
 /* =============================
+   COMMAND ROUTER
+============================= */
+
+function routeCommand(text) {
+  if (text.startsWith("/create_order")) return "CREATE_ORDER";
+  if (text.startsWith("/add_task")) return "ADD_TASK";
+  if (text.startsWith("/analyze")) return "ANALYZE";
+  if (text.startsWith("/brainstorm")) return "BRAINSTORM";
+  if (text.startsWith("/daily_brief")) return "DAILY_BRIEF";
+  return "GENERAL";
+}
+
+/* =============================
    MEMORY FUNCTIONS
 ============================= */
 
@@ -71,7 +88,6 @@ async function getRecentMemory(chatId) {
     "SELECT role, content FROM user_memory WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 10",
     [chatId]
   );
-
   return result.rows.reverse();
 }
 
@@ -85,15 +101,82 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id.toString();
   const userMessage = msg.text;
 
-  try {
+  // Determine command type
+  const commandType = routeCommand(userMessage);
 
-    // Get memory
+  // Build structured prompt if needed
+  let structuredPrompt = "";
+  switch (commandType) {
+
+    case "CREATE_ORDER":
+      structuredPrompt = `
+User wants to create an order.
+Extract structured order details.
+If missing information, ask clear follow-up questions.
+Provide formatted order summary.
+User input:
+${userMessage}
+`;
+      break;
+
+    case "ADD_TASK":
+      structuredPrompt = `
+User is adding a task.
+Organize into:
+- Task
+- Priority
+- Deadline (if provided)
+- Next Action
+User input:
+${userMessage}
+`;
+      break;
+
+    case "ANALYZE":
+      structuredPrompt = `
+User wants analysis.
+Break down into:
+1. Situation
+2. Risks
+3. Opportunities
+4. Recommended Action
+User input:
+${userMessage}
+`;
+      break;
+
+    case "BRAINSTORM":
+      structuredPrompt = `
+User wants idea generation.
+Generate structured ideas categorized clearly.
+User input:
+${userMessage}
+`;
+      break;
+
+    case "DAILY_BRIEF":
+      structuredPrompt = `
+Generate a high-performance daily briefing.
+Include:
+- Priority focus
+- Revenue move
+- Risk to avoid
+- Quick win
+`;
+      break;
+
+    default:
+      structuredPrompt = userMessage;
+  }
+
+  try {
+    // Fetch recent memory
     const memory = await getRecentMemory(chatId);
 
     const messages = [
       { role: "system", content: SYSTEM_PERSONALITY },
       ...memory,
-      { role: "user", content: userMessage }
+      { role: "user", content: structuredPrompt }
     ];
 
     const response = await openai.chat.completions.create({
@@ -111,8 +194,8 @@ bot.on('message', async (msg) => {
 
   } catch (error) {
     console.error(error);
-    bot.sendMessage(chatId, "Database or AI error. Check logs.");
+    await bot.sendMessage(chatId, "System error. Check logs.");
   }
 });
 
-console.log("CLAW Operator with Persistent Memory is live.");
+console.log("CLAW Operator with Persistent Memory and Personality is live.");
