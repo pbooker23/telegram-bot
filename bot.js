@@ -9,32 +9,58 @@ const openai = new OpenAI({
 });
 
 /* =============================
-   CORE BOOTSTRAP PERSONALITY
+   CORE PERSONALITY LAYER
 ============================= */
 
 const SYSTEM_PERSONALITY = `
-You are CLAW Operator.
+You are SON — an elite AI operator assigned exclusively to Pops.
 
-You operate like an elite executive assistant.
-You think strategically.
-You break things into actionable steps.
-You avoid fluff.
-You structure responses clearly.
+Tone:
+Casual but professional.
+Grounded. Strategic. Direct.
+Respectful of the Pops/Son dynamic without overdoing it.
 
-You support:
+Identity:
+You are Pops' personal AI operator.
+You think long-term.
+You structure clearly.
+You execute decisively.
+You avoid fluff and filler language.
+You never sound robotic.
+
+Core Capabilities:
 - Business automation
-- Order creation and organization
-- Strategy analysis
-- Personal performance tracking
-- Daily planning
-- Decision breakdowns
 - Revenue optimization
+- Strategic breakdowns
+- Task structuring
+- Order organization
+- Personal performance tracking
+- Daily execution planning
+- Systems thinking
 
-When appropriate, format responses using sections.
-Be precise.
-Be intelligent.
-Be decisive.
+Response Style Rules:
+- Use clean sections when useful
+- Use bullet points for structure
+- If missing info, ask direct follow-up questions
+- Think in leverage and efficiency
+- Default toward execution, not theory
+
+When answering general questions:
+Be intelligent, useful, and slightly warm in tone.
 `;
+
+/* =============================
+   LIGHT SESSION MEMORY (basic)
+============================= */
+
+const sessionMemory = {};
+
+function getConversationHistory(chatId) {
+  if (!sessionMemory[chatId]) {
+    sessionMemory[chatId] = [];
+  }
+  return sessionMemory[chatId];
+}
 
 /* =============================
    COMMAND ROUTER
@@ -46,6 +72,7 @@ function routeCommand(text) {
   if (text.startsWith("/analyze")) return "ANALYZE";
   if (text.startsWith("/brainstorm")) return "BRAINSTORM";
   if (text.startsWith("/daily_brief")) return "DAILY_BRIEF";
+  if (text.startsWith("/weather")) return "WEATHER";
   return "GENERAL";
 }
 
@@ -56,6 +83,7 @@ function routeCommand(text) {
 bot.on('message', async (msg) => {
   if (!msg.text) return;
 
+  const chatId = msg.chat.id;
   const userMessage = msg.text;
   const commandType = routeCommand(userMessage);
 
@@ -65,10 +93,19 @@ bot.on('message', async (msg) => {
 
     case "CREATE_ORDER":
       structuredPrompt = `
-User wants to create an order.
+Pops wants to create an order.
 Extract structured order details.
 If missing information, ask clear follow-up questions.
-Provide formatted order summary.
+
+Return format:
+Order Summary
+- Client:
+- Service:
+- Price:
+- Deadline:
+- Status:
+- Next Action:
+
 User input:
 ${userMessage}
 `;
@@ -76,12 +113,15 @@ ${userMessage}
 
     case "ADD_TASK":
       structuredPrompt = `
-User is adding a task.
-Organize into:
-- Task
-- Priority
-- Deadline (if provided)
-- Next Action
+Pops is adding a task.
+
+Return format:
+Task:
+Priority:
+Deadline:
+Next Action:
+Execution Note:
+
 User input:
 ${userMessage}
 `;
@@ -89,12 +129,15 @@ ${userMessage}
 
     case "ANALYZE":
       structuredPrompt = `
-User wants analysis.
-Break down into:
+Pops wants strategic analysis.
+
+Return format:
 1. Situation
 2. Risks
 3. Opportunities
-4. Recommended Action
+4. Leverage Points
+5. Recommended Action
+
 User input:
 ${userMessage}
 `;
@@ -102,8 +145,17 @@ ${userMessage}
 
     case "BRAINSTORM":
       structuredPrompt = `
-User wants idea generation.
-Generate structured ideas categorized clearly.
+Pops wants structured idea generation.
+
+Return format:
+Category 1:
+- Idea
+- Why it works
+
+Category 2:
+- Idea
+- Why it works
+
 User input:
 ${userMessage}
 `;
@@ -111,12 +163,26 @@ ${userMessage}
 
     case "DAILY_BRIEF":
       structuredPrompt = `
-Generate a high-performance daily briefing.
+Generate a high-performance daily briefing for Pops.
+
 Include:
-- Priority focus
-- Revenue move
-- Risk to avoid
-- Quick win
+- Primary Focus
+- Revenue Move
+- Risk to Avoid
+- Relationship Move
+- Quick Win
+- Execution Reminder
+`;
+      break;
+
+    case "WEATHER":
+      structuredPrompt = `
+Pops asked about weather.
+If you do not have live weather access, respond:
+"I don’t have live weather access yet. We can integrate an API if you want."
+
+User input:
+${userMessage}
 `;
       break;
 
@@ -125,21 +191,29 @@ Include:
   }
 
   try {
+
+    const history = getConversationHistory(chatId);
+
+    history.push({ role: "user", content: structuredPrompt });
+
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: SYSTEM_PERSONALITY },
-        { role: "user", content: structuredPrompt }
+        ...history.slice(-6) // last 6 exchanges only
       ],
     });
 
     const reply = response.choices[0].message.content;
-    await bot.sendMessage(msg.chat.id, reply);
+
+    history.push({ role: "assistant", content: reply });
+
+    await bot.sendMessage(chatId, reply);
 
   } catch (error) {
     console.error(error);
-    bot.sendMessage(msg.chat.id, "System error. Check logs.");
+    bot.sendMessage(chatId, "System error. Check Railway logs.");
   }
 });
 
-console.log("CLAW Operator is live.");
+console.log("SON Operator is live.");
