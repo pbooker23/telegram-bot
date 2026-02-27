@@ -4,20 +4,10 @@ const OpenAI = require('openai');
 const { Pool } = require('pg');
 
 /* =============================
-   TELEGRAM BOT
+   TELEGRAM & OPENAI INIT
 ============================= */
 
-const bot = new TelegramBot(process.env.TG_TOKEN, {
-  polling: {
-    autoStart: true,
-    interval: 300,
-    params: { timeout: 10 }
-  }
-});
-
-/* =============================
-   OPENAI CLIENT (NEW API)
-============================= */
+const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -26,8 +16,6 @@ const openai = new OpenAI({
 /* =============================
    DATABASE CONNECTION
 ============================= */
-
-const { Pool } = require("pg");
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -55,20 +43,43 @@ async function initDB() {
 initDB().catch(console.error);
 
 /* =============================
-   PERSONALITY
+   PERSONALITY LAYER
 ============================= */
 
 const SYSTEM_PERSONALITY = `
 You are CLAW Operator.
+
 You operate like an elite executive assistant.
 You think strategically.
 You break things into actionable steps.
 You avoid fluff.
 You structure responses clearly.
+
+You maintain context across conversations.
 Be precise.
 Be intelligent.
 Be decisive.
 `;
+
+/* =============================
+   MEMORY FUNCTIONS
+============================= */
+
+async function saveMemory(chatId, role, content) {
+  await pool.query(
+    "INSERT INTO user_memory (chat_id, role, content) VALUES ($1, $2, $3)",
+    [chatId, role, content]
+  );
+}
+
+async function getRecentMemory(chatId) {
+  const result = await pool.query(
+    "SELECT role, content FROM user_memory WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 10",
+    [chatId]
+  );
+
+  return result.rows.reverse();
+}
 
 /* =============================
    COMMAND ROUTER
@@ -81,29 +92,6 @@ function routeCommand(text) {
   if (text.startsWith("/brainstorm")) return "BRAINSTORM";
   if (text.startsWith("/daily_brief")) return "DAILY_BRIEF";
   return "GENERAL";
-}
-
-/* =============================
-   MEMORY
-============================= */
-
-async function saveMemory(chatId, role, content) {
-  await pool.query(
-    "INSERT INTO user_memory (chat_id, role, content) VALUES ($1, $2, $3)",
-    [chatId, role, content]
-  );
-}
-
-async function getRecentMemory(chatId) {
-  const result = await pool.query(
-    `SELECT role, content 
-     FROM user_memory 
-     WHERE chat_id = $1 
-     ORDER BY created_at DESC 
-     LIMIT 10`,
-    [chatId]
-  );
-  return result.rows.reverse();
 }
 
 /* =============================
@@ -127,7 +115,8 @@ Extract structured order details.
 If missing information, ask clear follow-up questions.
 Provide formatted order summary.
 User input:
-${userMessage}`;
+${userMessage}
+`;
       break;
 
     case "ADD_TASK":
@@ -136,37 +125,44 @@ User is adding a task.
 Organize into:
 - Task
 - Priority
-- Deadline
+- Deadline (if provided)
 - Next Action
 User input:
-${userMessage}`;
+${userMessage}
+`;
       break;
 
     case "ANALYZE":
       structuredPrompt = `
+User wants analysis.
 Break down into:
 1. Situation
 2. Risks
 3. Opportunities
 4. Recommended Action
 User input:
-${userMessage}`;
+${userMessage}
+`;
       break;
 
     case "BRAINSTORM":
       structuredPrompt = `
+User wants idea generation.
 Generate structured ideas categorized clearly.
 User input:
-${userMessage}`;
+${userMessage}
+`;
       break;
 
     case "DAILY_BRIEF":
       structuredPrompt = `
-Generate a high-performance daily briefing including:
+Generate a high-performance daily briefing.
+Include:
 - Priority focus
 - Revenue move
 - Risk to avoid
-- Quick win`;
+- Quick win
+`;
       break;
 
     default:
@@ -174,41 +170,32 @@ Generate a high-performance daily briefing including:
   }
 
   try {
+    // Retrieve memory
     const memory = await getRecentMemory(chatId);
 
-    const conversation = [
+    const messages = [
       { role: "system", content: SYSTEM_PERSONALITY },
       ...memory,
       { role: "user", content: structuredPrompt }
     ];
 
-    const response = await openai.responses.create({
-      model: "gpt-4.1-mini",
-      input: conversation
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages
     });
 
-    const reply = response.output_text;
+    const reply = response.choices[0].message.content;
 
+    // Save memory
     await saveMemory(chatId, "user", userMessage);
     await saveMemory(chatId, "assistant", reply);
 
     await bot.sendMessage(chatId, reply);
 
-  } catch (err) {
-    console.error("Error:", err.message);
-    await bot.sendMessage(chatId, "System error. Check logs.");
+  } catch (error) {
+    console.error(error);
+    bot.sendMessage(chatId, "System error. Check logs.");
   }
-});
-
-/* =============================
-   GRACEFUL SHUTDOWN
-============================= */
-
-process.on("SIGINT", async () => {
-  console.log("Shutting down...");
-  await bot.stopPolling();
-  await pool.end();
-  process.exit(0);
 });
 
 console.log("CLAW Operator with Persistent Memory is live.");
