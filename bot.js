@@ -4,10 +4,20 @@ const OpenAI = require('openai');
 const { Pool } = require('pg');
 
 /* =============================
-   TELEGRAM BOT & OPENAI CLIENT
+   TELEGRAM BOT
 ============================= */
 
-const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.TG_TOKEN, {
+  polling: {
+    autoStart: true,
+    interval: 300,
+    params: { timeout: 10 }
+  }
+});
+
+/* =============================
+   OPENAI CLIENT (NEW API)
+============================= */
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -19,7 +29,9 @@ const openai = new OpenAI({
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: process.env.DATABASE_URL?.includes("localhost")
+    ? false
+    : { rejectUnauthorized: false }
 });
 
 /* =============================
@@ -38,22 +50,19 @@ async function initDB() {
   `);
 }
 
-initDB();
+initDB().catch(console.error);
 
 /* =============================
-   PERSONALITY LAYER
+   PERSONALITY
 ============================= */
 
 const SYSTEM_PERSONALITY = `
 You are CLAW Operator.
-
 You operate like an elite executive assistant.
 You think strategically.
 You break things into actionable steps.
 You avoid fluff.
 You structure responses clearly.
-
-You maintain context across conversations.
 Be precise.
 Be intelligent.
 Be decisive.
@@ -73,7 +82,7 @@ function routeCommand(text) {
 }
 
 /* =============================
-   MEMORY FUNCTIONS
+   MEMORY
 ============================= */
 
 async function saveMemory(chatId, role, content) {
@@ -85,7 +94,11 @@ async function saveMemory(chatId, role, content) {
 
 async function getRecentMemory(chatId) {
   const result = await pool.query(
-    "SELECT role, content FROM user_memory WHERE chat_id = $1 ORDER BY created_at DESC LIMIT 10",
+    `SELECT role, content 
+     FROM user_memory 
+     WHERE chat_id = $1 
+     ORDER BY created_at DESC 
+     LIMIT 10`,
     [chatId]
   );
   return result.rows.reverse();
@@ -100,14 +113,11 @@ bot.on('message', async (msg) => {
 
   const chatId = msg.chat.id.toString();
   const userMessage = msg.text;
-
-  // Determine command type
   const commandType = routeCommand(userMessage);
 
-  // Build structured prompt if needed
   let structuredPrompt = "";
-  switch (commandType) {
 
+  switch (commandType) {
     case "CREATE_ORDER":
       structuredPrompt = `
 User wants to create an order.
@@ -115,8 +125,7 @@ Extract structured order details.
 If missing information, ask clear follow-up questions.
 Provide formatted order summary.
 User input:
-${userMessage}
-`;
+${userMessage}`;
       break;
 
     case "ADD_TASK":
@@ -125,44 +134,37 @@ User is adding a task.
 Organize into:
 - Task
 - Priority
-- Deadline (if provided)
+- Deadline
 - Next Action
 User input:
-${userMessage}
-`;
+${userMessage}`;
       break;
 
     case "ANALYZE":
       structuredPrompt = `
-User wants analysis.
 Break down into:
 1. Situation
 2. Risks
 3. Opportunities
 4. Recommended Action
 User input:
-${userMessage}
-`;
+${userMessage}`;
       break;
 
     case "BRAINSTORM":
       structuredPrompt = `
-User wants idea generation.
 Generate structured ideas categorized clearly.
 User input:
-${userMessage}
-`;
+${userMessage}`;
       break;
 
     case "DAILY_BRIEF":
       structuredPrompt = `
-Generate a high-performance daily briefing.
-Include:
+Generate a high-performance daily briefing including:
 - Priority focus
 - Revenue move
 - Risk to avoid
-- Quick win
-`;
+- Quick win`;
       break;
 
     default:
@@ -170,32 +172,41 @@ Include:
   }
 
   try {
-    // Fetch recent memory
     const memory = await getRecentMemory(chatId);
 
-    const messages = [
+    const conversation = [
       { role: "system", content: SYSTEM_PERSONALITY },
       ...memory,
       { role: "user", content: structuredPrompt }
     ];
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages
+    const response = await openai.responses.create({
+      model: "gpt-4.1-mini",
+      input: conversation
     });
 
-    const reply = response.choices[0].message.content;
+    const reply = response.output_text;
 
-    // Save memory
     await saveMemory(chatId, "user", userMessage);
     await saveMemory(chatId, "assistant", reply);
 
     await bot.sendMessage(chatId, reply);
 
-  } catch (error) {
-    console.error(error);
+  } catch (err) {
+    console.error("Error:", err.message);
     await bot.sendMessage(chatId, "System error. Check logs.");
   }
 });
 
-console.log("CLAW Operator with Persistent Memory and Personality is live.");
+/* =============================
+   GRACEFUL SHUTDOWN
+============================= */
+
+process.on("SIGINT", async () => {
+  console.log("Shutting down...");
+  await bot.stopPolling();
+  await pool.end();
+  process.exit(0);
+});
+
+console.log("CLAW Operator with Persistent Memory is live.");
