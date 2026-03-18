@@ -1,7 +1,7 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const OpenAI = require('openai');
-const express = require('express'); // For webhook handling
+const Anthropic = require('@anthropic-ai/sdk');
+const express = require('express');
 const bodyParser = require('body-parser');
 
 const app = express();
@@ -9,7 +9,7 @@ app.use(bodyParser.json());
 
 const TOKEN = process.env.TG_TOKEN;
 const bot = new TelegramBot(TOKEN);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // =============================
 // PERSONALITY LAYER
@@ -30,26 +30,51 @@ Be decisive.
 `;
 
 // =============================
+// CONVERSATION MEMORY (per chat)
+// =============================
+const conversationHistory = {};
+
+// =============================
 // MESSAGE HANDLER
 // =============================
 async function handleMessage(msg) {
-  if (!msg.text) return;
+  if (!msg || !msg.text) return;
 
   const chatId = msg.chat.id.toString();
   const userMessage = msg.text;
 
-  try {
-    const messages = [
-      { role: "system", content: SYSTEM_PERSONALITY },
-      { role: "user", content: userMessage }
-    ];
+  // Initialize history for new chats
+  if (!conversationHistory[chatId]) {
+    conversationHistory[chatId] = [];
+  }
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages
+  // Add user message to history
+  conversationHistory[chatId].push({
+    role: "user",
+    content: userMessage
+  });
+
+  // Keep last 20 messages to avoid token limits
+  if (conversationHistory[chatId].length > 20) {
+    conversationHistory[chatId] = conversationHistory[chatId].slice(-20);
+  }
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1024,
+      system: SYSTEM_PERSONALITY,
+      messages: conversationHistory[chatId]
     });
 
-    const reply = response.choices[0].message.content;
+    const reply = response.content[0].text;
+
+    // Save assistant reply to history
+    conversationHistory[chatId].push({
+      role: "assistant",
+      content: reply
+    });
+
     await bot.sendMessage(chatId, reply);
 
   } catch (error) {
@@ -61,7 +86,7 @@ async function handleMessage(msg) {
 // =============================
 // TELEGRAM WEBHOOK SETUP
 // =============================
-const RAILWAY_URL = process.env.RAILWAY_STATIC_URL; // Your Railway public URL
+const RAILWAY_URL = process.env.RAILWAY_STATIC_URL;
 const WEBHOOK_PATH = `/bot`;
 
 bot.setWebHook(`${RAILWAY_URL}${WEBHOOK_PATH}`);
