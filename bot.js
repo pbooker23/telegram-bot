@@ -2,14 +2,14 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const express = require('express');
-const bodyParser = require('body-parser');
 
 const app = express();
-app.use(bodyParser.json());
 
 const TOKEN = process.env.TG_TOKEN;
-const bot = new TelegramBot(TOKEN);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// Use polling instead of webhook — no URL needed, works anywhere
+const bot = new TelegramBot(TOKEN, { polling: true });
 
 // =============================
 // PERSONALITY
@@ -39,7 +39,7 @@ const conversationHistory = {};
 // =============================
 // MESSAGE HANDLER
 // =============================
-async function handleMessage(msg) {
+bot.on('message', async (msg) => {
   if (!msg || !msg.text) return;
 
   const chatId = msg.chat.id.toString();
@@ -74,25 +74,13 @@ async function handleMessage(msg) {
     console.error('[CLAW ERROR]', error);
     bot.sendMessage(chatId, "⚠️ Error occurred. Check logs.");
   }
-}
-
-// =============================
-// TELEGRAM WEBHOOK
-// =============================
-const RAILWAY_URL = process.env.RAILWAY_STATIC_URL;
-const WEBHOOK_PATH = `/bot`;
-
-bot.setWebHook(`${RAILWAY_URL}${WEBHOOK_PATH}`);
-
-app.post(WEBHOOK_PATH, (req, res) => {
-  handleMessage(req.body.message);
-  res.sendStatus(200);
 });
 
 // =============================
-// EXPRESS SERVER
+// EXPRESS SERVER (keeps Railway happy)
 // =============================
 const PORT = process.env.PORT || 8080;
+app.get('/', (req, res) => res.send('CLAW Operator running'));
 app.listen(PORT, () => {
   console.log(`CLAW Operator (Gemini) running on port ${PORT}`);
 });
