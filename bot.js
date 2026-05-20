@@ -92,7 +92,7 @@ app.post(WEBHOOK_PATH, (req, res) => {
 // =============================
 // EXPRESS SERVER
 // =============================
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`CLAW Operator (Gemini) running on port ${PORT}`);
 });
