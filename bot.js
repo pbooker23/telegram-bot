@@ -75,8 +75,7 @@ Rules:
 // ======================================
 // GEMINI MODEL
 // ======================================
-const model = genAI.getGenerativeModel({
-  model: 'gemini-2.0-flash',
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;1sk-or-v1-cd068828c761840acbc4278b74b2885c439f106a51bf6e84e9a74b4020987c28,
   systemInstruction: SYSTEM_PERSONALITY
 });
 
