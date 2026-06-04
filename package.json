@@ -1,6 +1,6 @@
 {
   "name": "claw-operator",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "CLAW Operator - Gemini-powered Telegram bot",
   "main": "bot.js",
   "scripts": {
