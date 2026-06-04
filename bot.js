@@ -2,7 +2,6 @@ require('dotenv').config();
 
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Redis = require('ioredis');
 
 // ======================================
@@ -10,91 +9,80 @@ const Redis = require('ioredis');
 // ======================================
 const {
   TG_TOKEN,
-  GEMINI_API_KEY,
+  GROQ_API_KEY,
   REDIS_URL,
   PORT = 8080
 } = process.env;
 
-if (!TG_TOKEN) {
-  throw new Error('Missing TG_TOKEN');
-}
-
-if (!GEMINI_API_KEY) {
-  throw new Error('Missing GEMINI_API_KEY');
-}
-
-if (!REDIS_URL) {
-  throw new Error('Missing REDIS_URL');
-}
+if (!TG_TOKEN) throw new Error('Missing TG_TOKEN');
+if (!GROQ_API_KEY) throw new Error('Missing GROQ_API_KEY');
+if (!REDIS_URL) throw new Error('Missing REDIS_URL');
 
 // ======================================
 // INIT
 // ======================================
 const app = express();
-
 const redis = new Redis(REDIS_URL);
-
-const bot = new TelegramBot(TG_TOKEN, {
-  polling: true
-});
-
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const bot = new TelegramBot(TG_TOKEN, { polling: true });
 
 // ======================================
 // SYSTEM PERSONALITY
 // ======================================
-const SYSTEM_PERSONALITY = `
-You are CLAW Operator.
+const SYSTEM_PERSONALITY = `You are CLAW Operator — an elite autonomous AI executive assistant.
 
-You are an elite autonomous AI executive assistant.
-
-Your owner is Pierre.
-He is building an affiliate arbitrage business using WarriorPlus products,
-Reddit traffic, Etsy SEO, Twitter growth, and AI automation.
+Your owner is Pierre. He is building an affiliate arbitrage business using WarriorPlus products,
+promoted through Reddit, Etsy, and Twitter in the make-money-online niche.
 
 Your responsibilities:
-- Research markets
-- Analyze products
+- Research markets and products
 - Write conversion-focused content
 - Build execution plans
 - Solve business problems
 - Prioritize revenue-generating actions
 
 Rules:
-- Be concise
-- Avoid fluff
+- Be concise and direct
 - Give actionable steps
-- Use numbered lists when useful
 - Think strategically
 - Optimize for leverage and speed
-- Never ramble
-- Ask only necessary questions
-- Telegram responses should be compact
-`;
+- Telegram responses should be compact`;
 
 // ======================================
-// GEMINI MODEL
+// GROQ API CALL
 // ======================================
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;1sk-or-v1-cd068828c761840acbc4278b74b2885c439f106a51bf6e84e9a74b4020987c28,
-  systemInstruction: SYSTEM_PERSONALITY
-});
+async function callGroq(messages) {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${GROQ_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: messages,
+      max_tokens: 1024,
+      temperature: 0.7
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Groq API error: ${response.status} - ${error}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
 
 // ======================================
-// SIMPLE USER COOLDOWN
+// COOLDOWN
 // ======================================
 const cooldowns = new Map();
 
 function isCoolingDown(chatId) {
-  if (cooldowns.has(chatId)) {
-    return true;
-  }
-
+  if (cooldowns.has(chatId)) return true;
   cooldowns.set(chatId, true);
-
-  setTimeout(() => {
-    cooldowns.delete(chatId);
-  }, 2500);
-
+  setTimeout(() => cooldowns.delete(chatId), 2500);
   return false;
 }
 
@@ -104,13 +92,8 @@ function isCoolingDown(chatId) {
 async function getHistory(chatId) {
   try {
     const data = await redis.get(`history:${chatId}`);
-
-    if (!data) {
-      return [];
-    }
-
+    if (!data) return [];
     return JSON.parse(data);
-
   } catch (err) {
     console.error('[REDIS GET ERROR]', err);
     return [];
@@ -120,14 +103,12 @@ async function getHistory(chatId) {
 async function saveHistory(chatId, history) {
   try {
     const trimmed = history.slice(-20);
-
     await redis.set(
       `history:${chatId}`,
       JSON.stringify(trimmed),
       'EX',
       60 * 60 * 24 * 7
     );
-
   } catch (err) {
     console.error('[REDIS SAVE ERROR]', err);
   }
@@ -145,42 +126,19 @@ async function clearHistory(chatId) {
 // COMMAND HANDLER
 // ======================================
 async function handleCommands(chatId, text) {
-
   if (text === '/start') {
-    await bot.sendMessage(
-      chatId,
-      '⚡ CLAW Operator online.'
-    );
-
+    await bot.sendMessage(chatId, '⚡ CLAW Operator online.');
     return true;
   }
-
   if (text === '/reset') {
     await clearHistory(chatId);
-
-    await bot.sendMessage(
-      chatId,
-      '🧠 Memory cleared.'
-    );
-
+    await bot.sendMessage(chatId, '🧠 Memory cleared.');
     return true;
   }
-
   if (text === '/help') {
-    await bot.sendMessage(
-      chatId,
-      `
-Available commands:
-
-/start - Start bot
-/reset - Clear memory
-/help - Show commands
-      `
-    );
-
+    await bot.sendMessage(chatId, `Available commands:\n\n/start - Start bot\n/reset - Clear memory\n/help - Show commands`);
     return true;
   }
-
   return false;
 }
 
@@ -189,129 +147,64 @@ Available commands:
 // ======================================
 function sanitizeInput(text) {
   if (!text) return '';
-
-  return text
-    .replace(/<[^>]*>?/gm, '')
-    .trim()
-    .slice(0, 4000);
+  return text.replace(/<[^>]*>?/gm, '').trim().slice(0, 4000);
 }
 
 // ======================================
 // MAIN MESSAGE HANDLER
 // ======================================
 bot.on('message', async (msg) => {
-
   try {
-
-    if (!msg || !msg.text) {
-      return;
-    }
+    if (!msg || !msg.text) return;
 
     const chatId = String(msg.chat.id);
+    const userMessage = sanitizeInput(msg.text);
 
-    let userMessage = sanitizeInput(msg.text);
+    if (!userMessage) return;
 
-    if (!userMessage) {
-      return;
-    }
-
-    // ======================================
-    // RATE LIMIT
-    // ======================================
     if (isCoolingDown(chatId)) {
-      return bot.sendMessage(
-        chatId,
-        '⏳ Slow down a little.'
-      );
+      return bot.sendMessage(chatId, '⏳ Slow down a little.');
     }
 
-    // ======================================
-    // COMMANDS
-    // ======================================
-    const commandHandled = await handleCommands(
-      chatId,
-      userMessage
-    );
+    const commandHandled = await handleCommands(chatId, userMessage);
+    if (commandHandled) return;
 
-    if (commandHandled) {
-      return;
-    }
-
-    // ======================================
-    // TYPING INDICATOR
-    // ======================================
     await bot.sendChatAction(chatId, 'typing');
 
-    // ======================================
-    // LOAD HISTORY
-    // ======================================
+    // Load history
     const history = await getHistory(chatId);
 
-    // ======================================
-    // START CHAT
-    // ======================================
-    const chat = model.startChat({
-      history
+    // Build messages array for Groq
+    const messages = [
+      { role: 'system', content: SYSTEM_PERSONALITY },
+      ...history,
+      { role: 'user', content: userMessage }
+    ];
+
+    // Call Groq
+    const reply = await callGroq(messages);
+
+    // Save updated history
+    const updatedHistory = [
+      ...history,
+      { role: 'user', content: userMessage },
+      { role: 'assistant', content: reply }
+    ];
+    await saveHistory(chatId, updatedHistory);
+
+    await bot.sendMessage(chatId, reply, {
+      disable_web_page_preview: true
     });
 
-    // ======================================
-    // SEND MESSAGE
-    // ======================================
-    const result = await chat.sendMessage(userMessage);
-
-    const response = result.response;
-
-    const reply =
-      response.text()?.trim() ||
-      'No response generated.';
-
-    // ======================================
-    // SAVE UPDATED HISTORY
-    // ======================================
-    const updatedHistory = await chat.getHistory();
-
-    await saveHistory(
-      chatId,
-      updatedHistory
-    );
-
-    // ======================================
-    // SEND RESPONSE
-    // ======================================
-    await bot.sendMessage(
-      chatId,
-      reply,
-      {
-        disable_web_page_preview: true
-      }
-    );
-
   } catch (error) {
-
     console.error('[CLAW ERROR]', error);
 
-    let errorMessage =
-      '⚠️ System temporarily unavailable.';
-
-    if (
-      error.message?.includes('quota')
-    ) {
-      errorMessage =
-        '⚠️ API quota exceeded.';
-    }
-
-    if (
-      error.message?.includes('API key')
-    ) {
-      errorMessage =
-        '⚠️ Invalid API configuration.';
-    }
+    let errorMessage = '⚠️ System temporarily unavailable.';
+    if (error.message?.includes('quota')) errorMessage = '⚠️ API quota exceeded.';
+    if (error.message?.includes('API key')) errorMessage = '⚠️ Invalid API configuration.';
 
     try {
-      await bot.sendMessage(
-        msg.chat.id,
-        errorMessage
-      );
+      await bot.sendMessage(msg.chat.id, errorMessage);
     } catch (e) {
       console.error('[TELEGRAM ERROR]', e);
     }
@@ -319,16 +212,14 @@ bot.on('message', async (msg) => {
 });
 
 // ======================================
-// HEALTHCHECK SERVER
+// HEALTHCHECK
 // ======================================
-app.get('/', (req, res) => {
-  res.send('CLAW Operator running');
-});
+app.get('/', (req, res) => res.send('CLAW Operator running'));
 
 app.listen(PORT, () => {
   console.log(`
 ======================================
-CLAW Operator ONLINE
+CLAW Operator ONLINE (Groq)
 Port: ${PORT}
 ======================================
 `);
@@ -338,21 +229,12 @@ Port: ${PORT}
 // GRACEFUL SHUTDOWN
 // ======================================
 process.on('SIGINT', async () => {
-  console.log('Shutting down...');
-
-  try {
-    await redis.quit();
-  } catch (e) {}
-
+  try { await redis.quit(); } catch (e) {}
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-  console.log('Shutting down...');
-
-  try {
-    await redis.quit();
-  } catch (e) {}
-
+  try { await redis.quit(); } catch (e) {}
   process.exit(0);
 });
+  
